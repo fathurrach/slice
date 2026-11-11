@@ -205,10 +205,16 @@ print(f'{ssh_port} {dev_str} {p1} {p2} {p3} {p4} {p5}')
         sudo incus exec "$instance" -- systemctl restart ssh 2>/dev/null || true
         sudo incus exec "$instance" -- bash -c "echo '$dev_p1-$dev_p5' > /etc/slice-ports" 2>/dev/null || true
         sudo incus exec "$instance" -- bash -c "cat << 'BASHRC' >> /home/$name/.bashrc
+
+# SLICE Developer Shortcuts
 alias info='slice-info'
 alias ports='myports'
 alias clean='slice-clean'
-if [ -z "\\$SLICE_BANNER_SHOWN" ]; then
+alias quota='slice-quota'
+alias disk='slice-quota'
+
+# Display Banner on Interactive Login
+if [ -z "\$SLICE_BANNER_SHOWN" ] && [ -t 1 ]; then
     export SLICE_BANNER_SHOWN=1
     [ -x /usr/local/bin/show-banner ] && /usr/local/bin/show-banner
 fi
