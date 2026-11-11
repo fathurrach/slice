@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+
+# ANSI Colors
+CYAN="\033[38;5;51m"
+GREEN="\033[38;5;82m"
+YELLOW="\033[38;5;220m"
+RED="\033[38;5;196m"
+WHITE="\033[1;37m"
+GRAY="\033[38;5;242m"
+MAGENTA="\033[38;5;201m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+USER_NAME=$(whoami)
+USER_UPPER=$(echo "$USER_NAME" | tr '[:lower:]' '[:upper:]')
+UPTIME=$(uptime -p 2>/dev/null | sed 's/up //' || echo "active")
+RAM_USED=$(free -h | awk '/Mem:/ {print $3}')
+RAM_TOTAL=$(free -h | awk '/Mem:/ {print $2}')
+CACHE_FILE="/tmp/.slice_disk_cache"
+if [ -f "$CACHE_FILE" ]; then
+    USED_MB=$(cat "$CACHE_FILE")
+else
+    USED_KB=$(du -sk --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run / 2>/dev/null | awk '{print $1}')
+    USED_MB=$((USED_KB / 1024))
+    echo "$USED_MB" > "$CACHE_FILE"
+fi
+USED_GB=$(awk "BEGIN {printf \"%.1f\", $USED_MB/1024}")
+REMAIN_GB=$(awk "BEGIN {printf \"%.1f\", 200 - ($USED_MB/1024)}")
+
+# Sarcastic & Witty Developer Quotes
+SARCASM_QUOTES=(
+    "It works on my machine. Then we will ship your machine."
+    "Weeks of coding can save you hours of planning."
+    "There's no test like production on a Friday afternoon."
+    "Code never lies, comments sometimes do, but documentation is pure fiction."
+    "If at first you don't succeed, call it version 1.0."
+    "Deleting code is 100x more satisfying than writing code."
+    "It's not a bug, it's an undocumented feature that only you can trigger."
+    "I'd love to help you with that bug, but I'm currently pretending to work."
+    "A QA engineer walks into a bar. Orders a beer. Orders 0 beers. Orders 999999999 beers. Orders a lizard."
+    "Don't worry if it doesn't work right. If everything did, you'd be out of a job."
+    "Always code as if the guy who ends up maintaining your code will be a violent psychopath who knows where you live."
+    "There is no cloud, it's just someone else's computer."
+    "Why do we fall? So we can learn to read the error logs properly."
+)
+RANDOM_QUOTE="${SARCASM_QUOTES[$RANDOM % ${#SARCASM_QUOTES[@]}]}"
+
+# 1. Double Slant ASCII: SLICE (Cyan) + USER (Magenta) side-by-side
+if [ -x /usr/local/bin/render_dual_slant.py ]; then
+    python3 /usr/local/bin/render_dual_slant.py "$USER_NAME"
+else
+    echo -e "${CYAN}${BOLD}"
+    echo "    _____ __    ________________"
+    echo "   / ___// /   /  _/ ____/ ____/"
+    echo "   \\__ \\/ /    / // /   / __/   "
+    echo "  ___/ / /____/ // /___/ /___   "
+    echo " /____/_____/___/\\____/_____/   "
+    echo -e "${RESET}"
+fi
+
+echo -e "  ${CYAN}SLICE · Private Cloud VPS Engine${RESET}  ${GRAY}│${RESET}  ${WHITE}Instance:${RESET} ${MAGENTA}${BOLD}${USER_UPPER}${RESET}  ${GRAY}│${RESET}  ${WHITE}Host:${RESET} ${CYAN}slice.atnx.my.id${RESET}"
+echo ""
+echo -e "  ${YELLOW}💬 \"${RANDOM_QUOTE}\"${RESET}"
+echo ""
+
+# 2. Status Panel Tersusun Vertikal ke Bawah (Boxed & Clean)
+echo -e "${GRAY}┌─────────────────────────────────────────────────────────────────┐${RESET}"
+echo -e "${GRAY}│${RESET}  ${CYAN}${BOLD}🖥️  SYSTEM METRICS & INSTANCE STATUS${RESET}                           ${GRAY}│${RESET}"
+echo -e "${GRAY}├─────────────────────────────────────────────────────────────────┤${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}Node Hostname :${RESET} slice (Ubuntu 24.04 LTS)                     ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}Public Ingress:${RESET} slice.atnx.my.id                             ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}Memory Status :${RESET} ${GREEN}${RAM_USED} / ${RAM_TOTAL}${RESET} (Dedicated Hardcap)          ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}CPU Resource  :${RESET} ${YELLOW}4 vCPU${RESET} (Dynamic Burst)                     ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}Disk Storage  :${RESET} ${GREEN}${USED_GB} GB${RESET} used of ${WHITE}200 GB${RESET} (${REMAIN_GB} GB free)    ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}Docker Engine :${RESET} ${GREEN}🟢 Active & Running${RESET}                            ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}Session Uptime:${RESET} ${UPTIME}                                    ${GRAY}│${RESET}"
+echo -e "${GRAY}├─────────────────────────────────────────────────────────────────┤${RESET}"
+echo -e "${GRAY}│${RESET}  ${CYAN}${BOLD}⚡ QUICK COMMANDS & SHORTCUTS${RESET}                                  ${GRAY}│${RESET}"
+echo -e "${GRAY}├─────────────────────────────────────────────────────────────────┤${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}quota${RESET}   ${GRAY}➜${RESET} Inspect 200GB disk quota balance & breakdown       ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}ports${RESET}   ${GRAY}➜${RESET} List your assigned public web development ports    ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}clean${RESET}   ${GRAY}➜${RESET} Free up disk space (prune Docker & apt caches)     ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}passwd${RESET}  ${GRAY}➜${RESET} Change your account SSH login password             ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}info${RESET}    ${GRAY}➜${RESET} Display full system & memory diagnostics           ${GRAY}│${RESET}"
+echo -e "${GRAY}│${RESET}  • ${WHITE}exit${RESET}    ${GRAY}➜${RESET} Terminate SSH connection                           ${GRAY}│${RESET}"
+echo -e "${GRAY}└─────────────────────────────────────────────────────────────────┘${RESET}"
+echo ""

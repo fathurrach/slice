@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+
+CYAN="\033[38;5;51m"
+GREEN="\033[38;5;82m"
+YELLOW="\033[38;5;220m"
+WHITE="\033[1;37m"
+GRAY="\033[38;5;242m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+PUBLIC_HOST="slice.atnx.my.id"
+LOCAL_IP="192.168.0.167"
+MESH_IP="100.108.185.46"
+
+# Ambil metadata dev ports dari /etc/slice-ports atau default
+if [ -f /etc/slice-ports ]; then
+    PORTS=$(cat /etc/slice-ports)
+else
+    PORTS="3101-3105"
+fi
+
+START_P=$(echo "$PORTS" | cut -d'-' -f1)
+END_P=$(echo "$PORTS" | cut -d'-' -f2)
+
+echo -e "${CYAN}${BOLD}🌐 YOUR FORWARDED DEVELOPMENT PORTS (${PORTS}):${RESET}"
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"
+for ((p=START_P; p<=END_P; p++)); do
+    echo -e "  • Port ${YELLOW}${BOLD}${p}${RESET} ──► ${WHITE}http://${PUBLIC_HOST}:${p}${RESET}  ${GRAY}(Public Domain)${RESET}"
+done
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"
+echo -e "  • Local Wi-Fi URL : ${GRAY}http://${LOCAL_IP}:<port>${RESET}"
+echo -e "  • Tailscale URL   : ${GRAY}http://${MESH_IP}:<port>${RESET}"
+echo ""
+echo -e "  ${GREEN}💡 Hint:${RESET} Bind your server (e.g. Next.js, Vite, FastAPI) to"
+echo -e "          ${WHITE}0.0.0.0:<port>${RESET} to access it directly from your browser!"
+echo ""

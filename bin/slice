@@ -1,0 +1,491 @@
+#!/usr/bin/env bash
+set -e
+
+BASE_DIR="/srv/slice"
+STATE_FILE="$BASE_DIR/state/slice-state.json"
+STORAGE_POOL="slice-pool"
+NETWORK_BRIDGE="slicebr0"
+
+# ANSI Colors
+CYAN="\033[38;5;51m"
+GREEN="\033[38;5;82m"
+YELLOW="\033[38;5;220m"
+RED="\033[38;5;196m"
+WHITE="\033[1;37m"
+GRAY="\033[38;5;242m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+sudo mkdir -p "$BASE_DIR/bin" "$BASE_DIR/templates" "$BASE_DIR/state"
+[ ! -f "$STATE_FILE" ] && echo "{}" | sudo tee "$STATE_FILE" >/dev/null
+
+function print_header() {
+    echo -e "${CYAN}${BOLD}"
+    echo "    _____ __    ________________"
+    echo "   / ___// /   /  _/ ____/ ____/"
+    echo "   \__ \/ /    / // /   / __/   "
+    echo "  ___/ / /____/ // /___/ /___   "
+    echo " /____/_____/___/\____/_____/   "
+    echo -e "  SLICE · Private Cloud VPS Engine 🍰⚡${RESET}"
+    echo -e "  ${GRAY}Node: ${WHITE}playfam1 (36.66.72.42)${GRAY} │ ${WHITE}i7-10750H${GRAY} │ ${WHITE}16GB RAM${GRAY} │ ${WHITE}GTX 1650${RESET}"
+    echo ""
+}
+
+function get_state() {
+    local key="$1"
+    python3 -c "import json, os; p='$STATE_FILE'; data=json.load(open(p)) if os.path.exists(p) else {}; print(data.get('$key', ''))" 2>/dev/null
+}
+
+function set_state() {
+    local name="$1"
+    local json_val="$2"
+    python3 -c "
+import json, os
+p='$STATE_FILE'
+data=json.load(open(p)) if os.path.exists(p) else {}
+data['$name'] = $json_val
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+"
+}
+
+function remove_state() {
+    local name="$1"
+    python3 -c "
+import json, os
+p='$STATE_FILE'
+data=json.load(open(p)) if os.path.exists(p) else {}
+if '$name' in data:
+    del data['$name']
+with open(p, 'w') as f:
+    json.dump(data, f, indent=2)
+"
+}
+
+function cmd_create() {
+    local name="$1"
+    local port="$2"
+    local ram="${3:-4GiB}"
+    local cpus="${4:-4}"
+    local pass="$5"
+
+    if [ -z "$name" ]; then
+        print_header
+        echo -e "${RED}[!] Error: Instance name is required!${RESET}"
+        echo -e "Usage  : slice create <name> [port] [ram] [cpu] [password]"
+        echo -e "Example: slice create danz"
+        exit 1
+    fi
+
+    # Validate name (lowercase, numbers, dashes, underscores)
+    if [[ ! "$name" =~ ^[a-z0-9_-]+$ ]]; then
+        echo -e "${RED}[!] Error: Name must contain only lowercase letters, numbers, dashes (-), and underscores (_).${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+
+    # Check if instance already exists
+    if sudo incus info "$instance" >/dev/null 2>&1; then
+        echo -e "${RED}[!] Error: Instance '$instance' already exists on Incus!${RESET}"
+        exit 1
+    fi
+
+    # Smart Slot & Port Recycling Allocator
+    read -r port dev_ports dev_p1 dev_p2 dev_p3 dev_p4 dev_p5 < <(python3 -c "
+import json, os, subprocess
+
+state_file = '$STATE_FILE'
+used_ssh = set()
+used_dev = set()
+
+if os.path.exists(state_file):
+    try:
+        data = json.load(open(state_file))
+        for v in data.values():
+            if isinstance(v, dict):
+                p = v.get('port')
+                if p: used_ssh.add(int(p))
+                d = v.get('dev_ports', '')
+                if '-' in d: used_dev.add(int(d.split('-')[0]))
+    except Exception:
+        pass
+
+try:
+    instances = subprocess.check_output(['sudo', 'incus', 'list', '-c', 'n', '--format', 'csv'], text=True).splitlines()
+    for inst in instances:
+        inst = inst.strip()
+        if not inst: continue
+        cfg = subprocess.check_output(['sudo', 'incus', 'config', 'show', inst], text=True)
+        import re
+        for m in re.finditer(r'listen: tcp:0\.0\.0\.0:(\d+)', cfg):
+            port_num = int(m.group(1))
+            if 2211 <= port_num <= 2230:
+                used_ssh.add(port_num)
+            elif 3101 <= port_num <= 3200 and (port_num - 1) % 10 == 0:
+                used_dev.add(port_num)
+except Exception:
+    pass
+
+assigned_slot = 1
+for slot in range(1, 21):
+    cand_ssh = 2210 + slot
+    cand_dev = 3100 + ((slot - 1) * 10) + 1
+    if cand_ssh not in used_ssh and cand_dev not in used_dev:
+        assigned_slot = slot
+        break
+
+ssh_port = '$port' if '$port' else str(2210 + assigned_slot)
+dev_start = 3100 + ((assigned_slot - 1) * 10) + 1
+p1 = dev_start
+p2 = dev_start + 1
+p3 = dev_start + 2
+p4 = dev_start + 3
+p5 = dev_start + 4
+dev_str = f'{p1}-{p5}'
+
+print(f'{ssh_port} {dev_str} {p1} {p2} {p3} {p4} {p5}')
+")
+
+    # Default password if omitted
+    if [ -z "$pass" ]; then
+        pass="${name}Pass26"
+    fi
+
+    print_header
+    echo -e "${CYAN}${BOLD}[*] Provisioning Private VPS Instance: '${WHITE}$instance${CYAN}'...${RESET}"
+    echo -e "• Guaranteed RAM  : ${YELLOW}$ram (Dedicated Hardcap)${RESET}"
+    echo -e "• CPU Allocation  : ${YELLOW}$cpus vCPU (Dynamic Burst)${RESET}"
+    echo -e "• Network Ingress : ${YELLOW}SSH Port $port · Dev Ports $dev_p1-$dev_p5${RESET}"
+    echo ""
+
+    echo -e "[1/5] Launching Ubuntu 24.04 LTS System Container..."
+    sudo incus launch images:ubuntu/24.04 "$instance"
+
+    echo -e "[2/5] Applying CGroup v2 limits & Docker nesting configuration..."
+    sudo incus config set "$instance" limits.memory="$ram"
+    sudo incus config set "$instance" limits.cpu="$cpus"
+    sudo incus config set "$instance" limits.processes="500"
+    sudo incus config set "$instance" security.nesting="true"
+    sudo incus config set "$instance" security.syscalls.intercept.mknod="true"
+    sudo incus config set "$instance" security.syscalls.intercept.setxattr="true"
+    sudo incus config set "$instance" security.syscalls.intercept.sysinfo="true"
+    sudo incus config set "$instance" raw.lxc="lxc.apparmor.profile=unconfined"
+
+    echo -e "[3/5] Forwarding ingress SSH ($port ──► 22) and development ports ($dev_p1-$dev_p5)..."
+    sudo incus config device add "$instance" ssh-proxy proxy listen=tcp:0.0.0.0:$port connect=tcp:127.0.0.1:22
+    for dp in $dev_p1 $dev_p2 $dev_p3 $dev_p4 $dev_p5; do
+        sudo incus config device add "$instance" "dev-proxy-$dp" proxy listen=tcp:0.0.0.0:$dp connect=tcp:127.0.0.1:$dp
+    done
+
+    echo -e "[4/5] Installing OpenSSH Server, Sudo, and development toolchain..."
+    sleep 3
+    sudo incus exec "$instance" -- apt-get update -y >/dev/null 2>&1
+    sudo incus exec "$instance" -- apt-get install -y openssh-server sudo curl git nano htop net-tools docker.io figlet >/dev/null 2>&1
+
+    echo -e "[5/5] Configuring user '$name', sudo permissions, and systemd services..."
+    sudo incus exec "$instance" -- hostnamectl set-hostname slice
+    sudo incus exec "$instance" -- sed -i "s/$instance/slice/g" /etc/hosts 2>/dev/null || true
+    sudo incus exec "$instance" -- useradd -m -s /bin/bash -G sudo "$name" 2>/dev/null || true
+    sudo incus exec "$instance" -- usermod -aG docker "$name" 2>/dev/null || true
+    sudo incus exec "$instance" -- bash -c "echo '$name:$pass' | chpasswd"
+    sudo incus exec "$instance" -- bash -c "echo '$name ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/$name"
+    sudo incus exec "$instance" -- chmod 440 "/etc/sudoers.d/$name"
+    sudo incus exec "$instance" -- systemctl enable --now ssh >/dev/null 2>&1
+    sudo incus exec "$instance" -- systemctl enable --now docker >/dev/null 2>&1
+
+    # Inject In-Slice Developer Toolchain
+    if [ -d "$BASE_DIR/templates" ]; then
+        sudo incus file push "$BASE_DIR/templates/slice-info" "$instance/usr/local/bin/slice-info" --mode 0755 2>/dev/null || true
+        sudo incus file push "$BASE_DIR/templates/myports" "$instance/usr/local/bin/myports" --mode 0755 2>/dev/null || true
+        sudo incus file push "$BASE_DIR/templates/slice-clean" "$instance/usr/local/bin/slice-clean" --mode 0755 2>/dev/null || true
+        sudo incus file push "$BASE_DIR/templates/render_dual_slant.py" "$instance/usr/local/bin/render_dual_slant.py" --mode 0755 2>/dev/null || true
+        sudo incus file push "$BASE_DIR/templates/show-banner" "$instance/usr/local/bin/show-banner" --mode 0755 2>/dev/null || true
+        sudo incus file push "$BASE_DIR/templates/99-slice-security.conf" "$instance/etc/ssh/sshd_config.d/99-slice-security.conf" --mode 0644 2>/dev/null || true
+        sudo incus exec "$instance" -- systemctl restart ssh 2>/dev/null || true
+        sudo incus exec "$instance" -- bash -c "echo '$dev_p1-$dev_p5' > /etc/slice-ports" 2>/dev/null || true
+        sudo incus exec "$instance" -- bash -c "cat << 'BASHRC' >> /home/$name/.bashrc
+alias info='slice-info'
+alias ports='myports'
+alias clean='slice-clean'
+if [ -z "\\$SLICE_BANNER_SHOWN" ]; then
+    export SLICE_BANNER_SHOWN=1
+    [ -x /usr/local/bin/show-banner ] && /usr/local/bin/show-banner
+fi
+BASHRC" 2>/dev/null || true
+    fi
+
+    # Extract Private IP
+    local ip=$(sudo incus list "$instance" -c 4 --format csv | grep -oE "10\.150\.0\.[0-9]+" | head -n 1 || echo "-")
+
+    # Record to JSON state
+    set_state "$name" "{\"name\": \"$name\", \"instance\": \"$instance\", \"ip\": \"$ip\", \"port\": $port, \"ram\": \"$ram\", \"cpus\": \"$cpus\", \"pass\": \"$pass\", \"dev_ports\": \"$dev_p1-$dev_p5\"}"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}[✓] SLICE instance '$name' PROVISIONED SUCCESSFULLY & READY!${RESET}"
+    echo -e "• Direct SSH Ingress : ${WHITE}ssh $name@36.66.72.42 -p $port${RESET}"
+    echo -e "• Local Wi-Fi Ingress: ${WHITE}ssh $name@192.168.0.167 -p $port${RESET}"
+    echo -e "• Tailscale Ingress  : ${WHITE}ssh $name@100.108.185.46 -p $port${RESET}"
+    echo -e "• Password           : ${YELLOW}$pass${RESET}"
+    echo -e "• Dev Port Range     : ${YELLOW}$dev_p1 to $dev_p5${RESET}"
+    echo ""
+    echo -e "${GRAY}Run '${CYAN}slice invite $name${GRAY}' to generate the official onboarding card.${RESET}"
+}
+
+function cmd_list() {
+    print_header
+    python3 /srv/slice/bin/slice_stats_formatter.py list
+}
+
+function cmd_stats() {
+    local opt="$1"
+    if [ "$opt" == "-w" ] || [ "$opt" == "--watch" ] || [ "$opt" == "watch" ]; then
+        python3 /srv/slice/bin/slice_stats_formatter.py stats watch
+    else
+        print_header
+        python3 /srv/slice/bin/slice_stats_formatter.py stats
+    fi
+}
+
+function cmd_invite() {
+    local name="$1"
+    if [ -z "$name" ]; then
+        echo -e "${RED}[!] Specify instance name: slice invite <name>${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+    if ! sudo incus info "$instance" >/dev/null 2>&1; then
+        echo -e "${RED}[!] Instance '$instance' not found!${RESET}"
+        exit 1
+    fi
+
+    local port=$(python3 -c "import json, os; p='$STATE_FILE'; print(json.load(open(p)).get('$name', {}).get('port', '2211'))" 2>/dev/null || echo "2211")
+    local pass=$(python3 -c "import json, os; p='$STATE_FILE'; print(json.load(open(p)).get('$name', {}).get('pass', '${name}Pass26'))" 2>/dev/null || echo "${name}Pass26")
+    local ram=$(sudo incus config get "$instance" limits.memory 2>/dev/null || echo "4GiB")
+    local cpu=$(sudo incus config get "$instance" limits.cpu 2>/dev/null || echo "4")
+    local dev=$(python3 -c "import json, os; p='$STATE_FILE'; print(json.load(open(p)).get('$name', {}).get('dev_ports', '3101-3105'))" 2>/dev/null || echo "3101-3105")
+
+    echo "======================================================================"
+    echo "  🍰 SLICE PRIVATE CLOUD VPS — DEVELOPER ONBOARDING CARD"
+    echo "======================================================================"
+    echo "Dear Developer / $name,"
+    echo ""
+    echo "Your dedicated Private Cloud VPS instance on node 'playfam1' is active."
+    echo ""
+    echo "Dedicated Resource Specifications (Pro-Tier Slice):"
+    echo "• Operating System       : Ubuntu 24.04 LTS (Native systemd)"
+    echo "• Guaranteed Memory (RAM): $ram Dedicated (Hardcap)"
+    echo "• Compute Capacity (CPU) : $cpu vCPU (Dynamic Burst)"
+    echo "• Storage Allocation     : 200 GB Storage (High-Speed SATA)"
+    echo "• Administrative Rights  : Full Passwordless Sudo / Root Access"
+    echo "• Containerization       : Native Docker & Docker Compose Enabled"
+    echo ""
+    echo "Connection Details:"
+    echo "• Public Domain Host     : slice.atnx.my.id"
+    echo "• Public IPv4 Address    : 36.66.72.42"
+    echo "• Local Wi-Fi Host       : 192.168.0.167"
+    echo "• Tailscale Mesh Host    : 100.108.185.46"
+    echo "• SSH Port               : $port"
+    echo "• Username               : $name"
+    echo "• Initial Password       : $pass"
+    echo ""
+    echo "Development Ports Block (Testing Web Apps / APIs / Databases):"
+    echo "• Forwarded Ports Range  : $dev (Host ──► Your VPS)"
+    echo "• Public Web Preview URL : http://slice.atnx.my.id:<port>"
+    echo ""
+    echo "Connect via Terminal (Mac / Linux / Windows PowerShell):"
+    echo "ssh $name@slice.atnx.my.id -p $port"
+    echo ""
+    echo "Security Recommendations:"
+    echo "Please register your SSH Public Key into ~/.ssh/authorized_keys"
+    echo "and update your initial password upon first login."
+    echo "======================================================================"
+}
+
+function cmd_gpu() {
+    local sub="$1"
+    local name="$2"
+
+    if [ -z "$sub" ] || [ -z "$name" ]; then
+        echo -e "${RED}[!] Usage: slice gpu {attach|detach} <name>${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+    if [ "$sub" == "attach" ]; then
+        echo -e "${CYAN}[*] Attaching NVIDIA GeForce GTX 1650 GPU to '$instance'...${RESET}"
+        sudo incus config device add "$instance" gpu0 gpu id=01:00.0 2>&1 || true
+        echo -e "${GREEN}[✓] GPU successfully attached to '$instance'! Run 'nvidia-smi' inside the instance.${RESET}"
+    elif [ "$sub" == "detach" ]; then
+        echo -e "${CYAN}[*] Detaching NVIDIA GPU from '$instance'...${RESET}"
+        sudo incus config device remove "$instance" gpu0 2>&1 || true
+        echo -e "${GREEN}[✓] GPU successfully returned to host.${RESET}"
+    fi
+}
+
+function cmd_port() {
+    local sub="$1"
+    local name="$2"
+    local port="$3"
+
+    if [ -z "$sub" ] || [ -z "$name" ]; then
+        echo -e "${RED}[!] Usage: slice port {add|list} <name> [port]${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+    if [ "$sub" == "add" ]; then
+        if [ -z "$port" ]; then
+            echo -e "${RED}[!] Specify port to forward: slice port add <name> <port>${RESET}"
+            exit 1
+        fi
+        echo -e "${CYAN}[*] Forwarding host port $port to '$instance:$port'...${RESET}"
+        sudo incus config device add "$instance" "custom-proxy-$port" proxy listen=tcp:0.0.0.0:$port connect=tcp:127.0.0.1:$port
+        echo -e "${GREEN}[✓] Port $port successfully mapped to '$instance'!${RESET}"
+    elif [ "$sub" == "list" ]; then
+        echo -e "${WHITE}${BOLD}FORWARDED PORTS FOR INSTANCE '$instance':${RESET}"
+        sudo incus config show "$instance" | grep -A 3 "type: proxy" || echo "No custom proxy ports configured."
+    fi
+}
+
+function cmd_key() {
+    local sub="$1"
+    local name="$2"
+    local key="$3"
+
+    if [ -z "$sub" ] || [ -z "$name" ]; then
+        echo -e "${RED}[!] Usage: slice key {add|list|clear} <name> ["ssh-key-string"|file.pub]${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+    if ! sudo incus info "$instance" >/dev/null 2>&1; then
+        echo -e "${RED}[!] Instance '$instance' not found!${RESET}"
+        exit 1
+    fi
+
+    if [ "$sub" == "add" ]; then
+        if [ -z "$key" ]; then
+            echo -e "${RED}[!] Error: Public key string or file path is required!${RESET}"
+            echo -e "Usage: slice key add <name> "ssh-ed25519 AAAAC3... user@host""
+            exit 1
+        fi
+
+        if [ -f "$key" ]; then
+            key=$(cat "$key")
+        fi
+
+        echo -e "${CYAN}[*] Injecting SSH public key for user '$name' into '$instance'...${RESET}"
+        sudo incus exec "$instance" -- mkdir -p "/home/$name/.ssh"
+        sudo incus exec "$instance" -- bash -c "echo '$key' >> /home/$name/.ssh/authorized_keys"
+        sudo incus exec "$instance" -- chown -R "$name:$name" "/home/$name/.ssh"
+        sudo incus exec "$instance" -- chmod 700 "/home/$name/.ssh"
+        sudo incus exec "$instance" -- chmod 600 "/home/$name/.ssh/authorized_keys"
+        echo -e "${GREEN}${BOLD}[✓] SSH Public Key registered successfully for '$name'!${RESET}"
+        echo -e "${GRAY}The user can now login passwordless via SSH key authentication.${RESET}"
+
+    elif [ "$sub" == "list" ]; then
+        echo -e "${WHITE}${BOLD}REGISTERED SSH PUBLIC KEYS FOR '$name' (${instance}):${RESET}"
+        sudo incus exec "$instance" -- cat "/home/$name/.ssh/authorized_keys" 2>/dev/null || echo "No public keys registered."
+
+    elif [ "$sub" == "clear" ]; then
+        echo -e "${YELLOW}[!] Clearing all registered SSH keys for user '$name'...${RESET}"
+        sudo incus exec "$instance" -- rm -f "/home/$name/.ssh/authorized_keys"
+        echo -e "${GREEN}[✓] All authorized keys cleared for '$name'.${RESET}"
+    fi
+}
+
+function cmd_backup() {
+    local name="$1"
+    if [ -z "$name" ]; then
+        echo -e "${RED}[!] Usage: slice backup <name>${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+    if ! sudo incus info "$instance" >/dev/null 2>&1; then
+        echo -e "${RED}[!] Instance '$instance' not found!${RESET}"
+        exit 1
+    fi
+
+    local snap_name="backup-$(date +%Y%m%d-%H%M%S)"
+    echo -e "${CYAN}[*] Creating instant point-in-time snapshot for '$instance'...${RESET}"
+    sudo incus snapshot create "$instance" "$snap_name"
+    echo -e "${GREEN}${BOLD}[✓] Snapshot '$snap_name' created successfully!${RESET}"
+    echo -e "${GRAY}To inspect snapshots: ${CYAN}sudo incus info $instance${RESET}"
+    echo -e "${GRAY}To restore:           ${CYAN}sudo incus snapshot restore $instance $snap_name${RESET}"
+}
+
+function cmd_delete() {
+    local name="$1"
+    if [ -z "$name" ]; then
+        echo -e "${RED}[!] Specify instance name: slice delete <name>${RESET}"
+        exit 1
+    fi
+
+    local instance="slice-$name"
+    echo -e "${YELLOW}[!] Terminating and destroying instance '$instance'...${RESET}"
+    sudo incus delete -f "$instance"
+    remove_state "$name"
+    echo -e "${GREEN}[✓] Instance '$name' deleted successfully.${RESET}"
+}
+
+# Dispatcher
+case "$1" in
+    create)  cmd_create "$2" "$3" "$4" "$5" "$6" ;;
+    list|ls) cmd_list ;;
+    stats)   cmd_stats "$2" ;;
+    top|watch) cmd_stats watch ;;
+    invite)  cmd_invite "$2" ;;
+    gpu)     cmd_gpu "$2" "$3" ;;
+    port)    cmd_port "$2" "$3" "$4" ;;
+    key)     cmd_key "$2" "$3" "$4" ;;
+    backup)  cmd_backup "$2" ;;
+    exec)
+        name="$2"
+        shift 2
+        sudo incus exec "slice-$name" -- "$@"
+        ;;
+    enter)   sudo incus exec "slice-$2" -- su - "$2" ;;
+    root)    sudo incus exec "slice-$2" -- /bin/bash ;;
+    start)   sudo incus start "slice-$2" ;;
+    stop)    sudo incus stop "slice-$2" ;;
+    restart) sudo incus restart "slice-$2" ;;
+    delete|rm) cmd_delete "$2" ;;
+    *)
+        print_header
+        echo -e "${WHITE}${BOLD}Usage:${RESET} ${CYAN}slice <command> [arguments]${RESET}"
+        echo ""
+        echo -e "${GRAY}┌────────────────────────────────────────────────────────────────────────┐${RESET}"
+        echo -e "${GRAY}│${RESET}  ${CYAN}${BOLD}🛠️  PROVISIONING & TENANT MANAGEMENT${RESET}                                  ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice create <name> [port] [ram] [cpu]${RESET} ${GRAY}➜${RESET} Provision new VPS instance   ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice list${RESET} (or ${WHITE}ls${RESET})                    ${GRAY}➜${RESET} Overview all active slices   ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice stats${RESET} (or ${WHITE}top${RESET})                  ${GRAY}➜${RESET} Realtime CPU & RAM telemetry ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice invite <name>${RESET}                   ${GRAY}➜${RESET} Generate WhatsApp card       ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice key add <name> "<pubkey>"${RESET}     ${GRAY}➜${RESET} Inject developer SSH pubkey  ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice key list <name>${RESET}                 ${GRAY}➜${RESET} List registered pubkeys      ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice backup <name>${RESET}                   ${GRAY}➜${RESET} Create instant snapshot      ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice delete <name>${RESET}                   ${GRAY}➜${RESET} Terminate and remove a slice ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  ${CYAN}${BOLD}🌐 NETWORKING & INGRESS${RESET}                                               ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice port add <name> <port>${RESET}          ${GRAY}➜${RESET} Forward custom port to slice ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice port list <name>${RESET}                ${GRAY}➜${RESET} List all mapped ports        ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  ${CYAN}${BOLD}🎮 HARDWARE ACCELERATION (GPU)${RESET}                                        ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice gpu attach <name>${RESET}               ${GRAY}➜${RESET} Grant access to GTX 1650 GPU ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice gpu detach <name>${RESET}               ${GRAY}➜${RESET} Reclaim GPU back to host     ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  ${CYAN}${BOLD}⚡ INSTANCE ACCESS & CONTROL${RESET}                                           ${GRAY}│${RESET}"
+        echo -e "${GRAY}├────────────────────────────────────────────────────────────────────────┤${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice enter <name>${RESET}                    ${GRAY}➜${RESET} Enter shell as tenant user   ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice root <name>${RESET}                     ${GRAY}➜${RESET} Open emergency root shell    ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice exec <name> <cmd>${RESET}               ${GRAY}➜${RESET} Run one-liner command inside ${GRAY}│${RESET}"
+        echo -e "${GRAY}│${RESET}  • ${WHITE}slice start / stop / restart <name>${RESET}   ${GRAY}➜${RESET} Manage instance power state  ${GRAY}│${RESET}"
+        echo -e "${GRAY}└────────────────────────────────────────────────────────────────────────┘${RESET}"
+        echo ""
+        ;;
+esac

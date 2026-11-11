@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+
+# Colors
+CYAN="\033[38;5;51m"
+GREEN="\033[38;5;82m"
+YELLOW="\033[38;5;220m"
+WHITE="\033[1;37m"
+GRAY="\033[38;5;242m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+USER_NAME=$(whoami)
+UPTIME=$(uptime -p 2>/dev/null | sed 's/up //' || echo "active")
+RAM_USED=$(free -h | awk '/Mem:/ {print $3}')
+RAM_TOTAL=$(free -h | awk '/Mem:/ {print $2}')
+CACHE_FILE="/tmp/.slice_disk_cache"
+if [ -f "$CACHE_FILE" ]; then
+    USED_MB=$(cat "$CACHE_FILE")
+else
+    USED_KB=$(du -sk --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run / 2>/dev/null | awk '{print $1}')
+    USED_MB=$((USED_KB / 1024))
+    echo "$USED_MB" > "$CACHE_FILE"
+fi
+USED_GB=$(awk "BEGIN {printf \"%.1f\", $USED_MB/1024}")
+PCT=$(awk "BEGIN {printf \"%.1f\", (($USED_MB/1024)/200)*100}")
+
+echo -e "${CYAN}${BOLD}┌─────────────────────────────────────────────────────────────────┐${RESET}"
+echo -e "${CYAN}${BOLD}│  🍰 SLICE DEVELOPER VPS — SYSTEM & RESOURCE OVERVIEW            │${RESET}"
+echo -e "${CYAN}${BOLD}└─────────────────────────────────────────────────────────────────┘${RESET}"
+echo -e "  • User / Tenant     : ${WHITE}${BOLD}${USER_NAME}${RESET}"
+echo -e "  • Node Hostname     : ${WHITE}$(hostname)${RESET} (Ubuntu 24.04 LTS)"
+echo -e "  • Memory Allocation : ${GREEN}${RAM_USED} / ${RAM_TOTAL}${RESET} (Dedicated Hardcap)"
+echo -e "  • CPU Allocation    : ${YELLOW}4 vCPU${RESET} (Dynamic Burst)"
+echo -e "  • Disk Storage      : ${WHITE}${USED_GB} GB / 200 GB${RESET} (${GREEN}${PCT}% used${RESET} · Dedicated Quota)"
+echo -e "  • Session Uptime    : ${WHITE}${UPTIME}${RESET}"
+echo -e "  • Docker Engine     : ${GREEN}Active${RESET} (${DOCKER_VER})"
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"
+echo -e "  💡 Useful Shortcuts: ${CYAN}quota${RESET} (disk balance) │ ${CYAN}ports${RESET} │ ${CYAN}clean${RESET}"
+echo -e "  🔒 Security Hint    : Run '${WHITE}${BOLD}passwd${RESET}' anytime to update your SSH password."
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"

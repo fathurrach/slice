@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+CYAN="\033[38;5;51m"
+GREEN="\033[38;5;82m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+echo -e "${CYAN}${BOLD}[*] Cleaning up package caches and unused Docker resources...${RESET}"
+sudo apt-get clean >/dev/null 2>&1 || true
+sudo apt-get autoremove -y >/dev/null 2>&1 || true
+docker image prune -f >/dev/null 2>&1 || true
+docker container prune -f >/dev/null 2>&1 || true
+rm -rf ~/.cache/* 2>/dev/null || true
+
+echo -e "${GREEN}${BOLD}[✓] Cleanup complete! Storage space reclaimed.${RESET}"
+df -h / | awk 'NR==2 {print "• Available Disk Space: " $4 " (of " $2 ")"}'

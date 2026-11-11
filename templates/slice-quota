@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+
+# ANSI Colors
+CYAN="\033[38;5;51m"
+GREEN="\033[38;5;82m"
+YELLOW="\033[38;5;220m"
+RED="\033[38;5;196m"
+WHITE="\033[1;37m"
+GRAY="\033[38;5;242m"
+BOLD="\033[1m"
+RESET="\033[0m"
+
+QUOTA_GB=200
+CACHE_FILE="/tmp/.slice_disk_cache"
+NOW=$(date +%s)
+
+# Hitung ukuran disk dengan cache 5 menit agar cepat
+if [ -f "$CACHE_FILE" ] && [ $((NOW - $(stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0))) -lt 300 ]; then
+    USED_MB=$(cat "$CACHE_FILE")
+else
+    # Hitung size dalam MB
+    USED_KB=$(du -sk --exclude=/proc --exclude=/sys --exclude=/dev --exclude=/run / 2>/dev/null | awk '{print $1}')
+    USED_MB=$((USED_KB / 1024))
+    echo "$USED_MB" > "$CACHE_FILE"
+fi
+
+USED_GB=$(awk "BEGIN {printf \"%.1f\", $USED_MB/1024}")
+REMAIN_GB=$(awk "BEGIN {printf \"%.1f\", $QUOTA_GB - ($USED_MB/1024)}")
+PCT=$(awk "BEGIN {printf \"%.1f\", (($USED_MB/1024)/$QUOTA_GB)*100}")
+PCT_INT=${PCT%.*}
+
+# Progress bar
+BAR_LEN=14
+FILLED=$(( (PCT_INT * BAR_LEN) / 100 ))
+[ $FILLED -gt $BAR_LEN ] && FILLED=$BAR_LEN
+EMPTY=$(( BAR_LEN - FILLED ))
+
+BAR_COLOR="${GREEN}"
+if [ $PCT_INT -ge 85 ]; then
+    BAR_COLOR="${RED}"
+elif [ $PCT_INT -ge 70 ]; then
+    BAR_COLOR="${YELLOW}"
+fi
+
+BAR_STR=$(printf "%${FILLED}s" | tr ' ' '■')
+EMPTY_STR=$(printf "%${EMPTY}s" | tr ' ' ' ')
+
+echo -e "${CYAN}${BOLD}┌─────────────────────────────────────────────────────────────────┐${RESET}"
+echo -e "${CYAN}${BOLD}│  💾 SLICE STORAGE QUOTA & USAGE BREAKDOWN                       │${RESET}"
+echo -e "${CYAN}${BOLD}└─────────────────────────────────────────────────────────────────┘${RESET}"
+echo -e "  • Dedicated Quota   : ${WHITE}${BOLD}${QUOTA_GB} GB${RESET} (High-Speed SATA Storage Pool)"
+echo -e "  • Currently Used    : ${WHITE}${USED_GB} GB${RESET} (${BAR_COLOR}${PCT}%${RESET} utilized)"
+echo -e "  • Storage Balance   : ${GREEN}${BOLD}${REMAIN_GB} GB Free${RESET}"
+echo -e "  • Usage Pressure    : ${BAR_COLOR}[${BAR_STR}${EMPTY_STR}] ${PCT}%${RESET}"
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"
+echo -e "  ${WHITE}${BOLD}📁 Directory Space Breakdown:${RESET}"
+
+# Cek folder docker dan home
+DOCKER_SIZE=$(du -sh /var/lib/docker 2>/dev/null | awk '{print $1}' || echo "0B")
+HOME_SIZE=$(du -sh "$HOME" 2>/dev/null | awk '{print $1}' || echo "0B")
+VAR_SIZE=$(du -sh /var 2>/dev/null | awk '{print $1}' || echo "0B")
+USR_SIZE=$(du -sh /usr 2>/dev/null | awk '{print $1}' || echo "0B")
+
+echo -e "  - Docker Engine Storage : ${YELLOW}${DOCKER_SIZE}${RESET}  (/var/lib/docker)"
+echo -e "  - User Workspace Folder : ${CYAN}${HOME_SIZE}${RESET}  ($HOME)"
+echo -e "  - System Packages       : ${GRAY}${USR_SIZE}${RESET}  (/usr)"
+echo -e "  - Logs & System State   : ${GRAY}${VAR_SIZE}${RESET}  (/var)"
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"
+
+if [ $PCT_INT -ge 85 ]; then
+    echo -e "  • Status : ${RED}⚠️ CRITICAL — Please run 'clean' to reclaim disk space!${RESET}"
+elif [ $PCT_INT -ge 70 ]; then
+    echo -e "  • Status : ${YELLOW}🟡 WARNING — Storage usage is moderately high.${RESET}"
+else
+    echo -e "  • Status : ${GREEN}🟢 HEALTHY — Plenty of disk space available.${RESET}"
+fi
+echo -e "${GRAY}─────────────────────────────────────────────────────────────────${RESET}"
+echo -e "  ${GRAY}💡 Tip: Run '${CYAN}clean${GRAY}' anytime to prune dangling Docker images & caches.${RESET}"
+echo ""
